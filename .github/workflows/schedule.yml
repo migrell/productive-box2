@@ -1,17 +1,102 @@
-name: Update gist
+name: Update Productivity Gist
 on:
   push:
     branches:
       - master
   schedule:
     - cron: "*/10 * * * *"
+
 jobs:
   update-gist:
     runs-on: ubuntu-latest
     steps:
-      - name: Update gist
-        uses: joshghent/productive-box@master
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          
+      - name: Create update script
+        run: |
+          cat > update-gist.js << 'EOL'
+          const { Octokit } = require('@octokit/rest');
+          
+          async function main() {
+            const octokit = new Octokit({
+              auth: process.env.GH_TOKEN
+            });
+            
+            const date = new Date();
+            const koreaTime = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+            const hour = koreaTime.getHours();
+            
+            // 시간대별 생산성 상태
+            const productiveHours = {};
+            for (let i = 0; i < 24; i++) {
+              productiveHours[i] = '🌙'; // 기본값은 휴식 상태
+            }
+            
+            // 현재 시간은 활성 상태로 표시
+            productiveHours[hour] = '🌞';
+            
+            // 아침 시간(8-12)은 생산적인 시간으로 표시
+            if (hour >= 8 && hour < 12) {
+              productiveHours[hour] = '🔥';
+            }
+            
+            // 점심 시간(12-13)
+            if (hour >= 12 && hour < 13) {
+              productiveHours[hour] = '🍔';
+            }
+            
+            // 오후 업무 시간(13-18)
+            if (hour >= 13 && hour < 18) {
+              productiveHours[hour] = '💻';
+            }
+            
+            // 저녁 시간(18-22)
+            if (hour >= 18 && hour < 22) {
+              productiveHours[hour] = '📚';
+            }
+            
+            // Gist 내용 만들기
+            let content = '## Jiho\'s Productivity Box\n\n';
+            content += '```text\n';
+            
+            // 시간대별 상태 표시
+            for (let i = 0; i < 24; i++) {
+              const displayHour = i.toString().padStart(2, '0');
+              content += `${displayHour}:00 ${productiveHours[i]}\n`;
+            }
+            
+            content += '```\n\n';
+            content += `Last Updated: ${koreaTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}`;
+            
+            // Gist 업데이트
+            await octokit.gists.update({
+              gist_id: process.env.GIST_ID,
+              files: {
+                'productive-box.md': {
+                  content: content
+                }
+              }
+            });
+            
+            console.log('Gist updated successfully!');
+          }
+          
+          main().catch(error => {
+            console.error('Error updating gist:', error);
+            process.exit(1);
+          });
+          EOL
+      
+      - name: Install dependencies
+        run: npm install @octokit/rest
+        
+      - name: Update Gist
+        run: node update-gist.js
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GIST_ID: 1a12be02f9e72a4ccf2596cba9e1190c
-          TIMEZONE: Asia/Seoul
