@@ -1,10 +1,10 @@
-name: Update Productivity Gist
+name: Update Productivity Gist with Commit Activity
 on:
   push:
     branches:
       - master
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "0 */6 * * *"  # 6시간마다 실행 (하루에 4번)
 
 jobs:
   update-gist:
@@ -27,37 +27,53 @@ jobs:
               auth: process.env.GH_TOKEN
             });
             
-            const date = new Date();
-            const koreaTime = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+            // 한국 시간으로 설정
+            const koreaTime = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
             const hour = koreaTime.getHours();
             
-            // 시간대별 생산성 상태
-            const productiveHours = {};
-            for (let i = 0; i < 24; i++) {
-              productiveHours[i] = '🌙'; // 기본값은 휴식 상태
-            }
+            // 최근 100개의 이벤트 가져오기
+            const username = 'migrell'; // GitHub 사용자 이름
             
-            // 현재 시간은 활성 상태로 표시
-            productiveHours[hour] = '🌞';
+            const events = await octokit.activity.listPublicEventsForUser({
+              username: username,
+              per_page: 100
+            });
             
-            // 아침 시간(8-12)은 생산적인 시간으로 표시
-            if (hour >= 8 && hour < 12) {
-              productiveHours[hour] = '🔥';
-            }
+            // 시간대별 활동 횟수 초기화
+            const hourActivity = Array(24).fill(0);
             
-            // 점심 시간(12-13)
-            if (hour >= 12 && hour < 13) {
-              productiveHours[hour] = '🍔';
-            }
+            // 이벤트 분석
+            events.data.forEach(event => {
+              const eventDate = new Date(event.created_at);
+              const eventHour = new Date(eventDate.toLocaleString('en-US', { timeZone: 'Asia/Seoul' })).getHours();
+              hourActivity[eventHour]++;
+            });
             
-            // 오후 업무 시간(13-18)
-            if (hour >= 13 && hour < 18) {
-              productiveHours[hour] = '💻';
-            }
+            // 시간대별 이모지 매핑
+            const hourEmojis = hourActivity.map(count => {
+              if (count === 0) return '🌙'; // 활동 없음
+              if (count < 2) return '🌤️'; // 약간의 활동
+              if (count < 5) return '⚡'; // 중간 활동
+              return '🔥'; // 높은 활동
+            });
             
-            // 저녁 시간(18-22)
-            if (hour >= 18 && hour < 22) {
-              productiveHours[hour] = '📚';
+            // 현재 시간 표시 강조
+            const originalEmoji = hourEmojis[hour];
+            hourEmojis[hour] = `[${originalEmoji}]`;
+            
+            // 활동 요약 통계
+            const totalActivity = hourActivity.reduce((sum, count) => sum + count, 0);
+            const morningActivity = hourActivity.slice(5, 12).reduce((sum, count) => sum + count, 0);
+            const afternoonActivity = hourActivity.slice(12, 18).reduce((sum, count) => sum + count, 0);
+            const eveningActivity = hourActivity.slice(18, 24).reduce((sum, count) => sum + count, 0);
+            const nightActivity = hourActivity.slice(0, 5).reduce((sum, count) => sum + count, 0);
+            
+            // 가장 활동적인 시간대 찾기
+            let mostActiveHour = 0;
+            for (let i = 1; i < 24; i++) {
+              if (hourActivity[i] > hourActivity[mostActiveHour]) {
+                mostActiveHour = i;
+              }
             }
             
             // Gist 내용 만들기
@@ -67,11 +83,22 @@ jobs:
             // 시간대별 상태 표시
             for (let i = 0; i < 24; i++) {
               const displayHour = i.toString().padStart(2, '0');
-              content += `${displayHour}:00 ${productiveHours[i]}\n`;
+              const activityCount = hourActivity[i].toString().padStart(2, ' ');
+              content += `${displayHour}:00 ${hourEmojis[i]} ${activityCount}\n`;
             }
             
             content += '```\n\n';
-            content += `Last Updated: ${koreaTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}`;
+            
+            // 활동 요약
+            content += '### 활동 요약\n';
+            content += `- 총 활동: ${totalActivity}회\n`;
+            content += `- 아침 활동 (05-12): ${morningActivity}회\n`;
+            content += `- 오후 활동 (12-18): ${afternoonActivity}회\n`;
+            content += `- 저녁 활동 (18-24): ${eveningActivity}회\n`;
+            content += `- 밤 활동 (00-05): ${nightActivity}회\n`;
+            content += `- 가장 활동적인 시간: ${mostActiveHour.toString().padStart(2, '0')}:00 (${hourActivity[mostActiveHour]}회)\n\n`;
+            
+            content += `Last Updated: ${koreaTime.toLocaleString('ko-KR')}`;
             
             // Gist 업데이트
             await octokit.gists.update({
