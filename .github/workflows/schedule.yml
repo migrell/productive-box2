@@ -13,5 +13,5 @@ jobs:
         uses: migrell/productive-box@master
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GIST_ID: ${{ secrets.GIST_ID }}
+          GIST_ID: 7d82b814f09fc2ec5c90384ec36552e5
           TIMEZONE: Asia/Seoul
