@@ -1,13 +1,13 @@
-name: Update Productivity Gist with Commit Activity
+name: Activity Box SVG Generator
 on:
+  schedule:
+    - cron: '*/10 * * * *'
   push:
     branches:
       - master
-  schedule:
-    - cron: "0 */6 * * *"  # 6시간마다 실행 (하루에 4번)
 
 jobs:
-  update-gist:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -17,104 +17,171 @@ jobs:
         with:
           node-version: '16'
           
-      - name: Create update script
+      - name: Create SVG generator script
         run: |
-          cat > update-gist.js << 'EOL'
+          cat > generate-svg.js << 'EOL'
           const { Octokit } = require('@octokit/rest');
+          const fs = require('fs');
           
           async function main() {
             const octokit = new Octokit({
-              auth: process.env.GH_TOKEN
+              auth: process.env.GH_PAT
             });
             
-            // 한국 시간으로 설정
-            const koreaTime = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
-            const hour = koreaTime.getHours();
+            const username = process.env.GH_USERNAME;
             
-            // 최근 100개의 이벤트 가져오기
-            const username = 'migrell'; // GitHub 사용자 이름
-            
-            const events = await octokit.activity.listPublicEventsForUser({
-              username: username,
+            // 최근 커밋 활동 가져오기
+            const events = await octokit.activity.listEventsForUser({
+              username,
               per_page: 100
             });
             
-            // 시간대별 활동 횟수 초기화
-            const hourActivity = Array(24).fill(0);
+            // 시간대별 커밋 카운트
+            const commitsByTimeOfDay = {
+              morning: 0,   // 06:00 - 11:59
+              daytime: 0,   // 12:00 - 17:59
+              evening: 0,   // 18:00 - 23:59
+              night: 0      // 00:00 - 05:59
+            };
             
             // 이벤트 분석
             events.data.forEach(event => {
-              const eventDate = new Date(event.created_at);
-              const eventHour = new Date(eventDate.toLocaleString('en-US', { timeZone: 'Asia/Seoul' })).getHours();
-              hourActivity[eventHour]++;
-            });
-            
-            // 시간대별 이모지 매핑
-            const hourEmojis = hourActivity.map(count => {
-              if (count === 0) return '🌙'; // 활동 없음
-              if (count < 2) return '🌤️'; // 약간의 활동
-              if (count < 5) return '⚡'; // 중간 활동
-              return '🔥'; // 높은 활동
-            });
-            
-            // 현재 시간 표시 강조
-            const originalEmoji = hourEmojis[hour];
-            hourEmojis[hour] = `[${originalEmoji}]`;
-            
-            // 활동 요약 통계
-            const totalActivity = hourActivity.reduce((sum, count) => sum + count, 0);
-            const morningActivity = hourActivity.slice(5, 12).reduce((sum, count) => sum + count, 0);
-            const afternoonActivity = hourActivity.slice(12, 18).reduce((sum, count) => sum + count, 0);
-            const eveningActivity = hourActivity.slice(18, 24).reduce((sum, count) => sum + count, 0);
-            const nightActivity = hourActivity.slice(0, 5).reduce((sum, count) => sum + count, 0);
-            
-            // 가장 활동적인 시간대 찾기
-            let mostActiveHour = 0;
-            for (let i = 1; i < 24; i++) {
-              if (hourActivity[i] > hourActivity[mostActiveHour]) {
-                mostActiveHour = i;
-              }
-            }
-            
-            // Gist 내용 만들기
-            let content = '## Jiho\'s Productivity Box\n\n';
-            content += '```text\n';
-            
-            // 시간대별 상태 표시
-            for (let i = 0; i < 24; i++) {
-              const displayHour = i.toString().padStart(2, '0');
-              const activityCount = hourActivity[i].toString().padStart(2, ' ');
-              content += `${displayHour}:00 ${hourEmojis[i]} ${activityCount}\n`;
-            }
-            
-            content += '```\n\n';
-            
-            // 활동 요약
-            content += '### 활동 요약\n';
-            content += `- 총 활동: ${totalActivity}회\n`;
-            content += `- 아침 활동 (05-12): ${morningActivity}회\n`;
-            content += `- 오후 활동 (12-18): ${afternoonActivity}회\n`;
-            content += `- 저녁 활동 (18-24): ${eveningActivity}회\n`;
-            content += `- 밤 활동 (00-05): ${nightActivity}회\n`;
-            content += `- 가장 활동적인 시간: ${mostActiveHour.toString().padStart(2, '0')}:00 (${hourActivity[mostActiveHour]}회)\n\n`;
-            
-            content += `Last Updated: ${koreaTime.toLocaleString('ko-KR')}`;
-            
-            // Gist 업데이트
-            await octokit.gists.update({
-              gist_id: process.env.GIST_ID,
-              files: {
-                'productive-box.md': {
-                  content: content
+              // PushEvent만 필터링 (실제 커밋 이벤트)
+              if (event.type === 'PushEvent') {
+                const eventDate = new Date(event.created_at);
+                const hour = eventDate.getHours();
+                
+                // 시간대별 카운트 증가
+                if (hour >= 6 && hour < 12) {
+                  commitsByTimeOfDay.morning += 1;
+                } else if (hour >= 12 && hour < 18) {
+                  commitsByTimeOfDay.daytime += 1;
+                } else if (hour >= 18 && hour < 24) {
+                  commitsByTimeOfDay.evening += 1;
+                } else {
+                  commitsByTimeOfDay.night += 1;
                 }
               }
             });
             
-            console.log('Gist updated successfully!');
+            // 총 커밋 수 계산
+            const totalCommits = Object.values(commitsByTimeOfDay).reduce((sum, count) => sum + count, 0);
+            
+            // 퍼센티지 계산
+            const percentages = {
+              morning: ((commitsByTimeOfDay.morning / totalCommits) * 100).toFixed(1),
+              daytime: ((commitsByTimeOfDay.daytime / totalCommits) * 100).toFixed(1),
+              evening: ((commitsByTimeOfDay.evening / totalCommits) * 100).toFixed(1),
+              night: ((commitsByTimeOfDay.night / totalCommits) * 100).toFixed(1)
+            };
+            
+            // SVG 템플릿 생성
+            const svgWidth = 500;
+            const svgHeight = 200;
+            const barHeight = 20;
+            const barWidth = 300;
+            const barSpacing = 35;
+            
+            // 바 색상 정의
+            const barColors = {
+              morning: '#F7DC6F', // 노란색
+              daytime: '#5DADE2', // 파란색
+              evening: '#7D3C98', // 보라색
+              night: '#2E4053'    // 짙은 남색
+            };
+            
+            // 바 길이 계산
+            const getBarLength = (percentage) => {
+              return (percentage / 100) * barWidth;
+            };
+            
+            // SVG 생성
+            let svg = `
+            <svg width="${svgWidth}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">
+              <style>
+                .text { font: 12px Arial, sans-serif; fill: #333; }
+                .title { font: bold 14px Arial, sans-serif; fill: #000; }
+                .emoji { font-size: 14px; }
+                .bar-bg { fill: #eee; }
+                .bar-fill { fill: #555; }
+                .percentage { font: 10px Arial, sans-serif; fill: #333; text-anchor: end; }
+              </style>
+              
+              <text x="10" y="20" class="title">I'm an early 🐤</text>
+              
+              <!-- Morning -->
+              <text x="10" y="${40 + barSpacing * 0}" class="text">
+                <tspan class="emoji">🌞</tspan> Morning
+              </text>
+              <rect x="100" y="${30 + barSpacing * 0}" width="${barWidth}" height="${barHeight}" rx="3" class="bar-bg" />
+              <rect x="100" y="${30 + barSpacing * 0}" width="${getBarLength(percentages.morning)}" height="${barHeight}" rx="3" fill="${barColors.morning}" />
+              <text x="410" y="${45 + barSpacing * 0}" class="text">${commitsByTimeOfDay.morning} commits</text>
+              <text x="${105 + getBarLength(percentages.morning)}" y="${45 + barSpacing * 0}" class="percentage">${percentages.morning}%</text>
+              
+              <!-- Daytime -->
+              <text x="10" y="${40 + barSpacing * 1}" class="text">
+                <tspan class="emoji">🌆</tspan> Daytime
+              </text>
+              <rect x="100" y="${30 + barSpacing * 1}" width="${barWidth}" height="${barHeight}" rx="3" class="bar-bg" />
+              <rect x="100" y="${30 + barSpacing * 1}" width="${getBarLength(percentages.daytime)}" height="${barHeight}" rx="3" fill="${barColors.daytime}" />
+              <text x="410" y="${45 + barSpacing * 1}" class="text">${commitsByTimeOfDay.daytime} commits</text>
+              <text x="${105 + getBarLength(percentages.daytime)}" y="${45 + barSpacing * 1}" class="percentage">${percentages.daytime}%</text>
+              
+              <!-- Evening -->
+              <text x="10" y="${40 + barSpacing * 2}" class="text">
+                <tspan class="emoji">🌃</tspan> Evening
+              </text>
+              <rect x="100" y="${30 + barSpacing * 2}" width="${barWidth}" height="${barHeight}" rx="3" class="bar-bg" />
+              <rect x="100" y="${30 + barSpacing * 2}" width="${getBarLength(percentages.evening)}" height="${barHeight}" rx="3" fill="${barColors.evening}" />
+              <text x="410" y="${45 + barSpacing * 2}" class="text">${commitsByTimeOfDay.evening} commits</text>
+              <text x="${105 + getBarLength(percentages.evening)}" y="${45 + barSpacing * 2}" class="percentage">${percentages.evening}%</text>
+              
+              <!-- Night -->
+              <text x="10" y="${40 + barSpacing * 3}" class="text">
+                <tspan class="emoji">🌙</tspan> Night
+              </text>
+              <rect x="100" y="${30 + barSpacing * 3}" width="${barWidth}" height="${barHeight}" rx="3" class="bar-bg" />
+              <rect x="100" y="${30 + barSpacing * 3}" width="${getBarLength(percentages.night)}" height="${barHeight}" rx="3" fill="${barColors.night}" />
+              <text x="410" y="${45 + barSpacing * 3}" class="text">${commitsByTimeOfDay.night} commits</text>
+              <text x="${105 + getBarLength(percentages.night)}" y="${45 + barSpacing * 3}" class="percentage">${percentages.night}%</text>
+              
+              <text x="10" y="${190}" class="text">Last Updated: ${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</text>
+            </svg>
+            `;
+            
+            // SVG 파일 저장
+            fs.writeFileSync('activity-summary.svg', svg);
+            console.log('SVG file generated successfully!');
+            
+            // GitHub에 SVG 파일 커밋
+            const fileContent = fs.readFileSync('activity-summary.svg', 'utf8');
+            
+            try {
+              // 저장소에서 현재 파일 정보 가져오기
+              const { data: fileData } = await octokit.repos.getContent({
+                owner: username,
+                repo: username,
+                path: 'activity-summary.svg',
+              }).catch(() => ({ data: { sha: null } }));
+              
+              // 파일 업데이트 또는 생성
+              await octokit.repos.createOrUpdateFileContents({
+                owner: username,
+                repo: username,
+                path: 'activity-summary.svg',
+                message: 'Update activity summary SVG',
+                content: Buffer.from(fileContent).toString('base64'),
+                sha: fileData.sha,
+              });
+              
+              console.log('Successfully committed SVG to GitHub repository!');
+            } catch (error) {
+              console.error('Error committing SVG file:', error);
+            }
           }
           
           main().catch(error => {
-            console.error('Error updating gist:', error);
+            console.error('Error generating SVG:', error);
             process.exit(1);
           });
           EOL
@@ -122,8 +189,8 @@ jobs:
       - name: Install dependencies
         run: npm install @octokit/rest
         
-      - name: Update Gist
-        run: node update-gist.js
+      - name: Generate SVG
+        run: node generate-svg.js
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GIST_ID: 1a12be02f9e72a4ccf2596cba9e1190c
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_USERNAME: migrell
